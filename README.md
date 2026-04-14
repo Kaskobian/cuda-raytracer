@@ -35,11 +35,20 @@ The repository is designed so that you can:
 ### Outputs
 The renderer currently generates the following camera views:
 
-- `view_1_front.png`
-- `view_2_right.png`
-- `view_3_left.png`
-- `view_4_wide.png`
-- `view_5_closeup.png`
+#### View 1 — Front
+![View 1 Front](output/view_1_front.png)
+
+#### View 2 — Right
+![View 2 Right](output/view_2_right.png)
+
+#### View 3 — Left
+![View 3 Left](output/view_3_left.png)
+
+#### View 4 — Wide
+![View 4 Wide](output/view_4_wide.png)
+
+#### View 5 — Closeup
+![View 5 Closeup](output/view_5_closeup.png)
 
 ### Render Modes
 The program supports four runtime presets:
