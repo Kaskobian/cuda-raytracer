@@ -75,6 +75,21 @@ def choose_option_interactively():
             return choice
         print("Invalid choice. Please enter 1, 2, 3, or 4.")
 
+
+def print_progress_line(prefix, done, total, start_time, extra=""):
+    progress = done / total if total > 0 else 0.0
+    elapsed = time.time() - start_time
+    eta = (elapsed / progress - elapsed) if progress > 0 else 0.0
+    line = (
+        f"\r{prefix} {done}/{total} | {progress*100:6.2f}% | "
+        f"elapsed {elapsed:6.1f}s | ETA {eta:6.1f}s"
+    )
+    if extra:
+        line += f" | {extra}"
+    print(line, end="", flush=True)
+
+
+
 # ---------------- CPU fallback path ----------------
 
 def reflect_np(I, N):
@@ -283,11 +298,9 @@ def render_cpu_single(scene_spheres, plane, lights, width, height, eye, look_at,
             rd = normalize_np(px * u + py * v - w)
             img[j, i] = shade_cpu_pixel(eye.copy(), rd, scene_spheres, plane, lights, max_depth)
 
-        progress = (j + 1) / height
-        elapsed = time.time() - start
-        eta = (elapsed / progress - elapsed) if progress > 0 else 0.0
-        print(f"[CPU fallback] Row {j+1}/{height} | {progress*100:6.2f}% | elapsed {elapsed:6.1f}s | ETA {eta:6.1f}s", flush=True)
+        print_progress_line("[CPU fallback] Row", j + 1, height, start)
 
+    print()
     return img
 
 
@@ -460,9 +473,10 @@ if CUDA_AVAILABLE:
             plane_checker(hp_x, hp_z, plane, hit_base)
 
     @cuda.jit
-    def render_kernel(out_img, spheres, plane, lights, eye, basis, width, height, fov, max_depth, progress):
-        x, y = cuda.grid(2)
-        if x >= width or y >= height:
+    def render_kernel(out_img, spheres, plane, lights, eye, basis, width, height, fov, max_depth, y_start, y_end):
+        x, y_local = cuda.grid(2)
+        y = y_start + y_local
+        if x >= width or y >= min(y_end, height):
             return
 
         aspect = width / height
@@ -624,8 +638,6 @@ if CUDA_AVAILABLE:
         out_img[y, x, 1] = int(min(max(col_y * 255.0, 0.0), 255.0))
         out_img[y, x, 2] = int(min(max(col_z * 255.0, 0.0), 255.0))
 
-        if x == 0 and y < progress.shape[0]:
-            progress[y] = 1
 
 
 def build_camera_basis(eye, look_at):
@@ -659,28 +671,27 @@ def render_gpu_image(filename, eye, look_at, fov, width, height, spheres, plane,
     d_eye = cuda.to_device(eye_np)
     d_basis = cuda.to_device(basis_np)
     d_img = cuda.device_array((height, width, 3), dtype=np.uint8)
-    d_progress = cuda.to_device(np.zeros(height, dtype=np.uint8))
 
     threads = (16, 16)
-    blocks = ((width + threads[0] - 1) // threads[0], (height + threads[1] - 1) // threads[1])
+    chunk_rows = 64
 
     start = time.time()
-    render_kernel[blocks, threads](d_img, d_spheres, d_plane, d_lights, d_eye, d_basis, width, height, fov, max_depth, d_progress)
+    for y_start in range(0, height, chunk_rows):
+        y_end = min(y_start + chunk_rows, height)
+        chunk_height = y_end - y_start
+        blocks = (
+            (width + threads[0] - 1) // threads[0],
+            (chunk_height + threads[1] - 1) // threads[1],
+        )
 
-    last_done = -1
-    while True:
+        render_kernel[blocks, threads](
+            d_img, d_spheres, d_plane, d_lights, d_eye, d_basis,
+            width, height, fov, max_depth, y_start, y_end
+        )
         cuda.synchronize()
-        prog = d_progress.copy_to_host()
-        done = int(prog.sum())
-        if done != last_done:
-            progress = done / height
-            elapsed = time.time() - start
-            eta = (elapsed / progress - elapsed) if progress > 0 else 0.0
-            print(f"[GPU] Rows done {done}/{height} | {progress*100:6.2f}% | elapsed {elapsed:6.1f}s | ETA {eta:6.1f}s", flush=True)
-            last_done = done
-        if done >= height:
-            break
-        time.sleep(0.2)
+        print_progress_line("[GPU] Rows", y_end, height, start)
+
+    print()
 
     img = d_img.copy_to_host()
     Image.fromarray(img).save(filename)
